@@ -2,27 +2,29 @@ import json
 import os
 import re
 import hashlib
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
-from vllm import LLM, SamplingParams
+from openai import OpenAI
+from openai import RateLimitError, APIConnectionError, APIError
 from datasets import load_dataset
 from tqdm import tqdm
 
-MODEL_PATH = "/dev/shm/DeepSeek-V3.2-Exp"
-DATA_DIR = "GPQA_diamond"  # Path to data directory
+client = OpenAI(
+    api_key="dummy",  # vLLM local service doesn't require real API key
+    base_url="http://localhost:8000/v1"
+)
+
 SYSTEM_PROMPT = "Answer the following multiple choice question. The last line of your response should be of the following format: 'ANSWER: $LETTER' (without quotes) where LETTER is one of ABCD. Think step by step before answering."
 MAX_TOKENS = 32000
 CACHE_FILE = "cache_vllm.json"
+DATA_FILE = "GPQA_diamond/test/gpqa_diamond.parquet"
 cache = {}
 cache_lock = Lock()
 
-# Initialize vLLM model
-llm = LLM(model=MODEL_PATH, trust_remote_code=True)
-sampling_params = SamplingParams(temperature=0.0, max_tokens=MAX_TOKENS)
 
-
-def load_data(data_dir):
-    ds = load_dataset('parquet', data_files=os.path.join(data_dir, "test", "gpqa_diamond.parquet"), split='train')
+def load_data():
+    ds = load_dataset('parquet', data_files=DATA_FILE, split='train')
     return [{'question': item['question'], 'answer': item['answer']} for item in ds]
 
 
@@ -45,16 +47,26 @@ def call_api(question):
         if prompt_hash in cache:
             return cache[prompt_hash]
     
-    # Format prompt with system and user messages
-    prompt = f"{SYSTEM_PROMPT}\n\n{question}"
+    for _ in range(3):
+        try:
+            response = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": question}
+                ],
+                max_tokens=MAX_TOKENS,
+                temperature=0.0
+            )
+            answer = response.choices[0].message.content
+            
+            with cache_lock:
+                cache[prompt_hash] = answer
+            
+            return answer
+        except (RateLimitError, APIConnectionError, APIError):
+            time.sleep(2)
     
-    outputs = llm.generate([prompt], sampling_params)
-    answer = outputs[0].outputs[0].text
-    
-    with cache_lock:
-        cache[prompt_hash] = answer
-    
-    return answer
+    raise Exception("API failed after 3 retries")
 
 
 def extract_answer(text):
@@ -71,7 +83,8 @@ def evaluate(data, concurrency=10):
             pred = extract_answer(response)
             return {'pred': pred, 'correct': q_data['answer'], 'ok': True}
         except Exception as e:
-            return {'pred': '', 'correct': q_data['answer'], 'ok': False}
+            print(f"Error processing question: {e}")
+            return {'pred': '', 'correct': q_data['answer'], 'ok': False, 'error': str(e)}
     
     correct = 0
     total = len(data)
@@ -98,8 +111,8 @@ def evaluate(data, concurrency=10):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--concurrency", type=int, default=10)
+    parser.add_argument("--concurrency", type=int, default=1)
     args = parser.parse_args()
     
-    data = load_data(DATA_DIR)
+    data = load_data()
     evaluate(data, args.concurrency)

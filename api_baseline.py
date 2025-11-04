@@ -18,13 +18,14 @@ client = OpenAI(
 MODEL = "deepseek/deepseek-reasoner"
 SYSTEM_PROMPT = "Answer the following multiple choice question. The last line of your response should be of the following format: 'ANSWER: $LETTER' (without quotes) where LETTER is one of ABCD. Think step by step before answering."
 MAX_TOKENS = 32000
-CACHE_FILE = "cache.json"
+CACHE_FILE = "cache_baseline.json"
+DATA_FILE = "GPQA_diamond/test/gpqa_diamond.parquet"
 cache = {}
 cache_lock = Lock()
 
 
-def load_data(data_dir):
-    ds = load_dataset('parquet', data_files=os.path.join(data_dir, "test", "gpqa_diamond.parquet"), split='train')
+def load_data():
+    ds = load_dataset('parquet', data_files=DATA_FILE, split='train')
     return [{'question': item['question'], 'answer': item['answer']} for item in ds]
 
 
@@ -111,15 +112,8 @@ def evaluate(data, concurrency=10):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data")
-    parser.add_argument("--hf-data")
     parser.add_argument("--concurrency", type=int, default=10)
     args = parser.parse_args()
     
-    if not args.data and not args.hf_data:
-        print("Error: must specify either --data or --hf-data")
-        exit(1)
-    
-    data_path = args.hf_data or args.data
-    data = load_data(data_path)
+    data = load_data()
     evaluate(data, args.concurrency)
