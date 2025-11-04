@@ -16,11 +16,31 @@ client = OpenAI(
 )
 
 SYSTEM_PROMPT = "Answer the following multiple choice question. The last line of your response should be of the following format: 'ANSWER: $LETTER' (without quotes) where LETTER is one of ABCD. Think step by step before answering."
-MAX_TOKENS = 32000
+MAX_TOKENS = 3000
 CACHE_FILE = "cache_vllm.json"
 DATA_FILE = "GPQA_diamond/test/gpqa_diamond.parquet"
 cache = {}
 cache_lock = Lock()
+_model_name = None
+
+
+def get_model_name():
+    """Auto-detect model name from vLLM server, with fallback"""
+    global _model_name
+    if _model_name:
+        return _model_name
+    
+    try:
+        models = client.models.list()
+        if models.data and len(models.data) > 0:
+            _model_name = models.data[0].id
+            return _model_name
+    except Exception:
+        pass
+    
+    # Fallback: use a generic name (vLLM may accept any string)
+    _model_name = "/dev/shm/DeepSeek-V3.2-Exp"
+    return _model_name
 
 
 def load_data():
@@ -50,6 +70,7 @@ def call_api(question):
     for _ in range(3):
         try:
             response = client.chat.completions.create(
+                model=get_model_name(),
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": question}
@@ -110,9 +131,14 @@ def evaluate(data, concurrency=10):
 
 if __name__ == "__main__":
     import argparse
+    
     parser = argparse.ArgumentParser()
     parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument("--model", type=str, default=None, help="Model name (auto-detected if not specified)")
     args = parser.parse_args()
+    
+    if args.model:
+        _model_name = args.model  # Module-level variable, no need for global
     
     data = load_data()
     evaluate(data, args.concurrency)
