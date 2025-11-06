@@ -65,7 +65,13 @@ def call_api(question):
     
     with cache_lock:
         if prompt_hash in cache:
-            return cache[prompt_hash]
+            cached = cache[prompt_hash]
+            # 向后兼容：如果是字符串（旧格式），直接返回
+            if isinstance(cached, str):
+                return cached
+            # 如果是字典（新格式），提取 answer
+            if isinstance(cached, dict):
+                return cached.get('choices', [{}])[0].get('message', {}).get('content', '')
     
     for _ in range(3):
         try:
@@ -75,14 +81,20 @@ def call_api(question):
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": question}
                 ],
-                max_tokens=MAX_TOKENS,
                 extra_body = {"chat_template_kwargs": {"thinking": True}},
+                max_tokens=MAX_TOKENS,
                 temperature=0.0
             )
             answer = response.choices[0].message.content
             
+            # 将 response 对象转换为字典存储
             with cache_lock:
-                cache[prompt_hash] = response
+                # 使用 model_dump() 方法（Pydantic v2）或 dict() 方法（Pydantic v1）
+                try:
+                    cache[prompt_hash] = response.model_dump()
+                except AttributeError:
+                    # 兼容旧版本的 Pydantic
+                    cache[prompt_hash] = response.dict()
             
             return answer
         except (RateLimitError, APIConnectionError, APIError):
