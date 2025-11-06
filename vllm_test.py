@@ -76,6 +76,7 @@ def call_api(question):
                     {"role": "user", "content": question}
                 ],
                 max_tokens=MAX_TOKENS,
+                extra_body = {"chat_template_kwargs": {"thinking": True}},
                 temperature=0.0
             )
             answer = response.choices[0].message.content
