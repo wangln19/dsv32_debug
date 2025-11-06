@@ -62,7 +62,7 @@ def call_api(question):
             answer = response.choices[0].message.content
             
             with cache_lock:
-                cache[prompt_hash] = answer
+                cache[prompt_hash] = response
             
             return answer
         except (RateLimitError, APIConnectionError, APIError):
